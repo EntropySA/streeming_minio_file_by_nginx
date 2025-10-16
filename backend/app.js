@@ -1,199 +1,195 @@
-// backend/app.js (CommonJS)
 const express = require('express');
-const multer = require('multer');
 const jwt = require('jsonwebtoken');
 const Minio = require('minio');
-const stream = require('stream');
+const multer = require('multer');
+const { v4: uuidv4 } = require('uuid');
+const path = require('path');
 
 const app = express();
-const PORT = process.env.PORT || 3000;
-const JWT_SECRET = process.env.JWT_SECRET || 'secret';
-
 app.use(express.json());
 
-// MinIO client
+// Configuration
+const JWT_SECRET = process.env.JWT_SECRET || 'change-this-super-secret-jwt-key-in-production';
+const JWT_EXPIRES_IN = '24h';
+
+console.log('Starting backend...');
+console.log('JWT_SECRET:', JWT_SECRET.substring(0, 10) + '...');
+console.log('MINIO_ENDPOINT:', process.env.MINIO_ENDPOINT || 'minio');
+
 const minioClient = new Minio.Client({
   endPoint: process.env.MINIO_ENDPOINT || 'minio',
-  port: parseInt(process.env.MINIO_PORT || '9000', 10),
-  useSSL: (process.env.MINIO_USE_SSL === 'true') || false,
+  port: parseInt(process.env.MINIO_PORT || '9000'),
+  useSSL: process.env.MINIO_USE_SSL === 'true',
   accessKey: process.env.MINIO_ACCESS_KEY || 'minioadmin',
   secretKey: process.env.MINIO_SECRET_KEY || 'minioadmin'
 });
 
-const MINIO_BUCKET = process.env.MINIO_BUCKET || 'tasama-recordings';
+const BUCKET_NAME = process.env.MINIO_BUCKET || 'tasama-recordings';
+const MAX_UPLOAD_BYTES = parseInt(process.env.MAX_UPLOAD_BYTES || '1073741824');
 
-// Ensure bucket exists on startup
-(async () => {
-  try {
-    const exists = await minioClient.bucketExists(MINIO_BUCKET);
-    if (!exists) {
-      await minioClient.makeBucket(MINIO_BUCKET);
-      console.log(`Created bucket: ${MINIO_BUCKET}`);
-    } else {
-      console.log(`Bucket ${MINIO_BUCKET} already exists`);
-    }
-  } catch (err) {
-    console.error('Bucket check failed:', err.message);
-  }
-})();
-
-// multer in-memory
 const upload = multer({
   storage: multer.memoryStorage(),
-  limits: { fileSize: parseInt(process.env.MAX_UPLOAD_BYTES || String(1024 * 1024 * 1024), 10) }
+  limits: { fileSize: MAX_UPLOAD_BYTES }
 });
 
-app.get('/', (req, res) => res.send('Media Upload API running'));
+// Middleware to verify JWT
+const authenticateToken = (req, res, next) => {
+  const authHeader = req.headers['authorization'];
+  const token = authHeader && authHeader.split(' ')[1];
 
-// Simple auth helper
-function verifyTokenFromHeader(req) {
-  const authHeader = req.headers['authorization'] || req.headers['Authorization'];
-  if (!authHeader) throw new Error('missing token');
-  const token = authHeader.split(' ')[1];
-  if (!token) throw new Error('missing token');
-  return jwt.verify(token, JWT_SECRET);
-}
+  if (!token) {
+    return res.status(401).json({ error: 'unauthorized', message: 'No token provided' });
+  }
 
-// ============ Login endpoint to get JWT token ============
+  jwt.verify(token, JWT_SECRET, (err, user) => {
+    if (err) {
+      return res.status(403).json({ error: 'forbidden', message: 'Invalid or expired token' });
+    }
+    req.user = user;
+    next();
+  });
+};
+
+// Health check
+app.get('/health', (req, res) => {
+  res.send('Backend OK');
+});
+
+// Login endpoint
 app.post('/auth/login', (req, res) => {
-  try {
-    const { username, password } = req.body || {};
-    
-    if (!username || !password) {
-      return res.status(400).json({ error: 'Username and password required' });
-    }
-    
-    // Demo auth - replace with real user validation
-    if (password !== 'demo123') {
-      return res.status(401).json({ error: 'Invalid credentials' });
-    }
-    
+  const { username, password } = req.body;
+
+  console.log('Login attempt:', username);
+
+  if (username === 'testuser' && password === 'demo123') {
     const token = jwt.sign(
-      { 
-        sub: username,
-        username: username,
-        iat: Math.floor(Date.now() / 1000)
-      },
+      { sub: username, username },
       JWT_SECRET,
-      { expiresIn: '24h' }
+      { expiresIn: JWT_EXPIRES_IN }
     );
-    
-    console.log(`[LOGIN] user=${username} token generated`);
-    return res.json({ token, expiresIn: '24h' });
-  } catch (err) {
-    console.error('[LOGIN ERROR]', err.message);
-    return res.status(500).json({ error: 'Login failed' });
+
+    console.log('Login successful:', username);
+
+    return res.json({
+      success: true,
+      token,
+      expiresIn: JWT_EXPIRES_IN,
+      username
+    });
   }
+
+  res.status(401).json({ error: 'unauthorized', message: 'Invalid credentials' });
 });
 
-// ============ Nginx auth_request endpoint ============
-app.get('/authz/media', async (req, res) => {
-  try {
-    const user = verifyTokenFromHeader(req);
-    const originalUri = req.headers['x-original-uri'] || '';
-    const originalMethod = req.headers['x-original-method'] || 'GET';
+// Authorization endpoint for Nginx auth_request
+app.get('/authz/media', (req, res) => {
+  const authHeader = req.headers['authorization'];
+  const token = authHeader && authHeader.split(' ')[1];
 
-    console.log(`[AUTHZ] user=${user.username} method=${originalMethod} uri=${originalUri}`);
+  console.log('AUTHZ - Token:', token ? 'present' : 'missing');
 
-    // Only allow GET/HEAD/OPTIONS on /v1/audio/
-    if (!/^\/v1\/audio\/.+/.test(originalUri)) {
-      console.error('[AUTHZ] Invalid path format');
-      return res.status(403).json({ error: 'invalid path' });
-    }
-    
-    if (!['GET', 'HEAD', 'OPTIONS'].includes(originalMethod)) {
-      console.error('[AUTHZ] Method not allowed');
-      return res.status(403).json({ error: 'method not allowed' });
-    }
-
-    // Extract file path
-    const filePath = originalUri.replace(/^\/v1\/audio\//, '');
-
-    // Optional: Add per-user authorization policy here
-    // For example, check if user has access to this specific file
-
-    console.log(`[AUTHZ] Success - authorized access to: ${filePath}`);
-    return res.status(200).send('OK');
-    
-  } catch (err) {
-    console.error('[AUTHZ] Failed:', err.message);
-    return res.status(401).json({ error: 'unauthorized' });
+  if (!token) {
+    console.log('AUTHZ FAILED: No token');
+    return res.status(401).send('Unauthorized');
   }
+
+  jwt.verify(token, JWT_SECRET, (err, user) => {
+    if (err) {
+      console.log('AUTHZ FAILED:', err.message);
+      return res.status(403).send('Forbidden');
+    }
+    
+    console.log('AUTHZ SUCCESS:', user.username);
+    res.status(200).send('OK');
+  });
 });
 
-// ============ Upload endpoint ============
-app.post('/media/upload', upload.single('file'), async (req, res) => {
+// Upload endpoint
+app.post('/media/upload', authenticateToken, upload.single('file'), async (req, res) => {
   try {
-    const user = verifyTokenFromHeader(req);
-    
     if (!req.file) {
-      console.error('[UPLOAD] No file in request');
-      return res.status(400).json({ error: 'No file uploaded' });
+      return res.status(400).json({ error: 'bad_request', message: 'No file uploaded' });
     }
 
-    const filename = req.file.originalname;
-    const buffer = req.file.buffer;
-    const date = new Date();
-    const key = `${date.getFullYear()}/${String(date.getMonth() + 1).padStart(2, '0')}/${filename}`;
+    const file = req.file;
+    const ext = path.extname(file.originalname);
+    const now = new Date();
+    const year = now.getFullYear();
+    const month = String(now.getMonth() + 1).padStart(2, '0');
+    const fileId = uuidv4();
+    const objectName = `${year}/${month}/${fileId}${ext}`;
 
-    console.log(`[UPLOAD] user=${user.username} filename=${filename} size=${buffer.length} key=${key}`);
+    console.log('Uploading:', objectName);
 
-    // Stream buffer into MinIO
-    const pass = new stream.PassThrough();
-    pass.end(buffer);
+    await minioClient.putObject(
+      BUCKET_NAME,
+      objectName,
+      file.buffer,
+      file.size,
+      { 'Content-Type': file.mimetype }
+    );
 
-    await minioClient.putObject(MINIO_BUCKET, key, pass, buffer.length, {
-      'Content-Type': req.file.mimetype
+    console.log('Upload successful');
+
+    res.json({
+      success: true,
+      message: 'File uploaded successfully',
+      file: {
+        id: fileId,
+        key: objectName,
+        originalName: file.originalname,
+        size: file.size,
+        mimeType: file.mimetype,
+        uploadedAt: now.toISOString(),
+        uploadedBy: req.user.username
+      }
     });
-    
-    console.log(`[UPLOAD] Success - key=${key}`);
-
-    return res.json({ 
-      success: true, 
-      key,
-      downloadPath: `/v1/audio/${key}`
-    });
-  } catch (err) {
-    console.error('[UPLOAD ERROR]', err && (err.stack || err.message || err));
-    return res.status(401).json({ error: 'Unauthorized or upload failed', details: err && err.message });
+  } catch (error) {
+    console.error('Upload error:', error);
+    res.status(500).json({ error: 'internal_error', message: error.message });
   }
 });
 
-// ============ List files endpoint (optional) ============
-app.get('/media/list', async (req, res) => {
+// List files endpoint
+app.get('/media/list', authenticateToken, async (req, res) => {
   try {
-    const user = verifyTokenFromHeader(req);
-    
+    const stream = minioClient.listObjects(BUCKET_NAME, '', true);
     const files = [];
-    const stream = minioClient.listObjects(MINIO_BUCKET, '', true);
-    
+
     stream.on('data', (obj) => {
       files.push({
         key: obj.name,
         size: obj.size,
         lastModified: obj.lastModified,
-        downloadPath: `/v1/audio/${obj.name}`
+        etag: obj.etag
       });
     });
-    
+
     stream.on('error', (err) => {
-      console.error('[LIST ERROR]', err.message);
-      return res.status(500).json({ error: 'List failed' });
+      console.error('List error:', err);
+      res.status(500).json({ error: 'internal_error', message: err.message });
     });
-    
+
     stream.on('end', () => {
-      console.log(`[LIST] user=${user.username} count=${files.length}`);
-      return res.json({ success: true, files });
+      console.log('Listed files:', files.length);
+      res.json({ success: true, files, count: files.length });
     });
-    
-  } catch (err) {
-    console.error('[LIST ERROR]', err.message);
-    return res.status(401).json({ error: 'Unauthorized or list failed' });
+  } catch (error) {
+    console.error('List error:', error);
+    res.status(500).json({ error: 'internal_error', message: error.message });
   }
 });
 
-app.listen(PORT, () => {
-  console.log(`Backend running on port ${PORT}`);
-  console.log(`JWT_SECRET: ${JWT_SECRET.substring(0, 10)}...`);
-  console.log(`MinIO Bucket: ${MINIO_BUCKET}`);
+// Error handler
+app.use((err, req, res, next) => {
+  console.error('Error:', err);
+  res.status(500).json({ error: 'internal_error', message: err.message });
+});
+
+// Start server
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, '0.0.0.0', () => {
+  console.log(`✓ Backend listening on port ${PORT}`);
+  console.log(`✓ MinIO: ${process.env.MINIO_ENDPOINT || 'minio'}:${process.env.MINIO_PORT || '9000'}`);
+  console.log(`✓ Bucket: ${BUCKET_NAME}`);
 });

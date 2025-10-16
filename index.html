@@ -1,0 +1,494 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Media Streaming Player - Tasama</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+        }
+
+        .container {
+            max-width: 800px;
+            width: 100%;
+            background: white;
+            border-radius: 20px;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+            overflow: hidden;
+        }
+
+        .header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 30px;
+            text-align: center;
+        }
+
+        .header h1 {
+            font-size: 2em;
+            margin-bottom: 10px;
+        }
+
+        .header p {
+            opacity: 0.9;
+            font-size: 0.9em;
+        }
+
+        .content {
+            padding: 30px;
+        }
+
+        .form-group {
+            margin-bottom: 20px;
+        }
+
+        label {
+            display: block;
+            margin-bottom: 8px;
+            color: #333;
+            font-weight: 600;
+            font-size: 14px;
+        }
+
+        input[type="text"],
+        textarea {
+            width: 100%;
+            padding: 12px;
+            border: 2px solid #ddd;
+            border-radius: 8px;
+            font-size: 14px;
+            font-family: monospace;
+            transition: border-color 0.3s;
+        }
+
+        input[type="text"]:focus,
+        textarea:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+
+        textarea {
+            resize: vertical;
+            min-height: 100px;
+        }
+
+        button {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            padding: 14px 40px;
+            border-radius: 8px;
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: transform 0.2s, box-shadow 0.2s;
+            width: 100%;
+        }
+
+        button:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(102, 126, 234, 0.4);
+        }
+
+        button:active {
+            transform: translateY(0);
+        }
+
+        button:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+            transform: none;
+        }
+
+        .status {
+            padding: 12px;
+            border-radius: 8px;
+            margin-top: 15px;
+            font-weight: 500;
+        }
+
+        .status.success {
+            background: #d4edda;
+            color: #155724;
+            border: 1px solid #c3e6cb;
+        }
+
+        .status.error {
+            background: #f8d7da;
+            color: #721c24;
+            border: 1px solid #f5c6cb;
+        }
+
+        .status.info {
+            background: #d1ecf1;
+            color: #0c5460;
+            border: 1px solid #bee5eb;
+        }
+
+        .player-container {
+            background: #000;
+            padding: 20px;
+            border-radius: 10px;
+            margin-top: 20px;
+            display: none;
+        }
+
+        .player-container.active {
+            display: block;
+        }
+
+        .player-title {
+            color: white;
+            margin-bottom: 15px;
+            font-size: 1.1em;
+            text-align: center;
+        }
+
+        video {
+            width: 100%;
+            max-height: 500px;
+            border-radius: 8px;
+            background: #000;
+        }
+
+        audio {
+            width: 100%;
+            border-radius: 8px;
+        }
+
+        .debug-info {
+            background: #f8f9fa;
+            padding: 15px;
+            border-radius: 8px;
+            margin-top: 15px;
+            font-family: monospace;
+            font-size: 12px;
+            max-height: 300px;
+            overflow-y: auto;
+            border: 1px solid #ddd;
+        }
+
+        .controls {
+            display: flex;
+            gap: 10px;
+            margin-top: 15px;
+        }
+
+        .controls button {
+            flex: 1;
+            padding: 10px;
+            font-size: 14px;
+        }
+
+        .test-buttons {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 10px;
+            margin-top: 15px;
+        }
+
+        .test-buttons button {
+            padding: 10px;
+            font-size: 14px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🎬 Media Streaming Player</h1>
+            <p>Direct streaming from MinIO via Nginx with JWT authentication</p>
+        </div>
+
+        <div class="content">
+            <div class="form-group">
+                <label for="baseUrl">API Base URL:</label>
+                <input type="text" id="baseUrl" value="http://localhost:18080" placeholder="http://localhost:18080">
+            </div>
+
+            <div class="form-group">
+                <label for="fileId">File ID (Path):</label>
+                <input type="text" id="fileId" value="2025/10/53531b9d-ccce-4740-a364-a3adbcfc7a22.mp4" placeholder="2025/10/filename.mp4">
+            </div>
+
+            <div class="form-group">
+                <label for="accessToken">Access Token (JWT):</label>
+                <textarea id="accessToken" placeholder="Click 'Test Login' to get a token or paste your own"></textarea>
+            </div>
+
+            <div class="test-buttons">
+                <button onclick="testHealth()">🏥 Test Health</button>
+                <button onclick="testLogin()">🔑 Test Login</button>
+                <button onclick="testList()">📋 List Files</button>
+                <button onclick="loadMedia()">▶ Load & Play</button>
+            </div>
+
+            <div id="statusMessage"></div>
+            <div id="debugInfo" class="debug-info" style="display:none;"></div>
+
+            <div class="player-container" id="playerContainer">
+                <div class="player-title" id="playerTitle"></div>
+                <div id="mediaPlayer"></div>
+                <div class="controls">
+                    <button onclick="downloadMedia()">⬇ Download</button>
+                    <button onclick="reset()">🔄 Reset</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let debugLog = [];
+
+        function addDebug(message, data = null) {
+            const timestamp = new Date().toLocaleTimeString();
+            debugLog.push(`[${timestamp}] ${message}`);
+            if (data) {
+                debugLog.push(JSON.stringify(data, null, 2));
+            }
+            updateDebugDisplay();
+            console.log(message, data);
+        }
+
+        function updateDebugDisplay() {
+            const debugDiv = document.getElementById('debugInfo');
+            debugDiv.style.display = 'block';
+            debugDiv.textContent = debugLog.join('\n');
+            debugDiv.scrollTop = debugDiv.scrollHeight;
+        }
+
+        async function testHealth() {
+            const baseUrl = document.getElementById('baseUrl').value.trim();
+            showStatus('info', 'Testing health endpoint...');
+            addDebug('Testing health endpoint', { url: `${baseUrl}/health` });
+
+            try {
+                const response = await fetch(`${baseUrl}/health`);
+                const text = await response.text();
+                addDebug('Health check response', { status: response.status, body: text });
+                showStatus('success', `✓ Health check passed: ${text}`);
+            } catch (error) {
+                addDebug('Health check failed', { error: error.message });
+                showStatus('error', `✗ Health check failed: ${error.message}`);
+            }
+        }
+
+        async function testLogin() {
+            const baseUrl = document.getElementById('baseUrl').value.trim();
+            showStatus('info', 'Testing login...');
+            addDebug('Testing login', { url: `${baseUrl}/auth/login` });
+
+            try {
+                const response = await fetch(`${baseUrl}/auth/login`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ username: 'testuser', password: 'demo123' })
+                });
+
+                const data = await response.json();
+                addDebug('Login response', { status: response.status, data });
+
+                if (response.ok && data.token) {
+                    document.getElementById('accessToken').value = data.token;
+                    showStatus('success', `✓ Login successful! Token expires in ${data.expiresIn}`);
+                } else {
+                    showStatus('error', `✗ Login failed: ${data.error || 'Unknown error'}`);
+                }
+            } catch (error) {
+                addDebug('Login failed', { error: error.message });
+                showStatus('error', `✗ Login failed: ${error.message}`);
+            }
+        }
+
+        async function testList() {
+            const baseUrl = document.getElementById('baseUrl').value.trim();
+            const token = document.getElementById('accessToken').value.trim();
+
+            if (!token) {
+                showStatus('error', 'Please login first or provide a token');
+                return;
+            }
+
+            showStatus('info', 'Fetching file list...');
+            addDebug('Fetching file list', { url: `${baseUrl}/media/list` });
+
+            try {
+                const response = await fetch(`${baseUrl}/media/list`, {
+                    headers: { 'Authorization': `Bearer ${token}` }
+                });
+
+                const data = await response.json();
+                addDebug('File list response', { status: response.status, data });
+
+                if (response.ok && data.success) {
+                    showStatus('success', `✓ Found ${data.files.length} files`);
+                    
+                    // Auto-fill first file if available
+                    if (data.files.length > 0) {
+                        const firstFile = data.files[0];
+                        document.getElementById('fileId').value = firstFile.key;
+                        addDebug('Auto-filled first file', { key: firstFile.key });
+                    }
+                } else {
+                    showStatus('error', `✗ Failed to list files: ${data.error || 'Unknown error'}`);
+                }
+            } catch (error) {
+                addDebug('List files failed', { error: error.message });
+                showStatus('error', `✗ Failed to list files: ${error.message}`);
+            }
+        }
+
+        async function loadMedia() {
+            const baseUrl = document.getElementById('baseUrl').value.trim();
+            const fileId = document.getElementById('fileId').value.trim();
+            const accessToken = document.getElementById('accessToken').value.trim();
+
+            if (!baseUrl || !fileId || !accessToken) {
+                showStatus('error', 'Please fill in all fields');
+                return;
+            }
+
+            const url = `${baseUrl}/v1/audio/${fileId}`;
+            showStatus('info', 'Loading media...');
+            addDebug('Loading media', { url, tokenLength: accessToken.length });
+
+            try {
+                const response = await fetch(url, {
+                    method: 'GET',
+                    headers: {
+                        'Authorization': `Bearer ${accessToken}`
+                    },
+                    mode: 'cors'
+                });
+
+                addDebug('Media response', {
+                    status: response.status,
+                    statusText: response.statusText,
+                    headers: Object.fromEntries([...response.headers.entries()])
+                });
+
+                if (!response.ok) {
+                    const errorText = await response.text();
+                    addDebug('Error response body', { body: errorText });
+                    throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+                }
+
+                const blob = await response.blob();
+                addDebug('Blob received', { size: blob.size, type: blob.type });
+
+                const blobUrl = URL.createObjectURL(blob);
+                const fileName = fileId.split('/').pop();
+                const ext = fileName.split('.').pop().toLowerCase();
+                
+                const videoExts = ['mp4', 'webm', 'ogg', 'mov', 'avi', 'mkv', 'm4v'];
+                const isVideo = videoExts.includes(ext);
+
+                document.getElementById('playerTitle').textContent = `Now Playing: ${fileName}`;
+                const mediaPlayer = document.getElementById('mediaPlayer');
+
+                if (isVideo) {
+                    mediaPlayer.innerHTML = `
+                        <video controls autoplay>
+                            <source src="${blobUrl}" type="video/${ext}">
+                            Your browser does not support the video tag.
+                        </video>
+                    `;
+                } else {
+                    mediaPlayer.innerHTML = `
+                        <audio controls autoplay>
+                            <source src="${blobUrl}" type="audio/${ext}">
+                            Your browser does not support the audio tag.
+                        </audio>
+                    `;
+                }
+
+                document.getElementById('playerContainer').classList.add('active');
+                showStatus('success', `✓ Media loaded! Size: ${formatBytes(blob.size)}`);
+                
+                setTimeout(() => {
+                    document.getElementById('playerContainer').scrollIntoView({ behavior: 'smooth' });
+                }, 100);
+
+            } catch (error) {
+                addDebug('Load media failed', { error: error.message, stack: error.stack });
+                showStatus('error', `✗ Failed to load media: ${error.message}`);
+            }
+        }
+
+        async function downloadMedia() {
+            const baseUrl = document.getElementById('baseUrl').value.trim();
+            const fileId = document.getElementById('fileId').value.trim();
+            const token = document.getElementById('accessToken').value.trim();
+
+            if (!baseUrl || !fileId || !token) {
+                showStatus('error', 'Please load media first');
+                return;
+            }
+
+            const url = `${baseUrl}/v1/audio/${fileId}`;
+            showStatus('info', 'Downloading...');
+
+            try {
+                const response = await fetch(url, {
+                    headers: { 'Authorization': `Bearer ${token}` }
+                });
+
+                if (!response.ok) throw new Error(`HTTP ${response.status}`);
+
+                const blob = await response.blob();
+                const downloadUrl = window.URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = downloadUrl;
+                a.download = fileId.split('/').pop();
+                document.body.appendChild(a);
+                a.click();
+                window.URL.revokeObjectURL(downloadUrl);
+                document.body.removeChild(a);
+                showStatus('success', '✓ Download started!');
+            } catch (error) {
+                showStatus('error', `✗ Download failed: ${error.message}`);
+            }
+        }
+
+        function reset() {
+            document.getElementById('fileId').value = '';
+            document.getElementById('accessToken').value = '';
+            document.getElementById('playerContainer').classList.remove('active');
+            document.getElementById('statusMessage').innerHTML = '';
+            debugLog = [];
+            document.getElementById('debugInfo').style.display = 'none';
+        }
+
+        function showStatus(type, message) {
+            const statusDiv = document.getElementById('statusMessage');
+            statusDiv.innerHTML = `<div class="status ${type}">${message}</div>`;
+        }
+
+
+        function formatBytes(bytes) {
+            if (bytes === 0) return '0 Bytes';
+            const k = 1024;
+            const sizes = ['Bytes', 'KB', 'MB', 'GB'];
+            const i = Math.floor(Math.log(bytes) / Math.log(k));
+            return Math.round(bytes / Math.pow(k, i) * 100) / 100 + ' ' + sizes[i];
+        }
+
+        window.addEventListener('load', () => {
+            addDebug('Page loaded', { baseUrl: document.getElementById('baseUrl').value });
+        });
+    </script>
+</body>
+</html>
