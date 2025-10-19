@@ -1,0 +1,57 @@
+curl -X POST https://localhost:18443/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"username":"testuser","password":"demo123"}' \
+  -k
+
+curl -X POST http://localhost:18080/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"username":"testuser","password":"demo123"}' \
+  -k
+
+
+  # Replace YOUR_TOKEN with the token from step 1
+curl -X POST https://localhost:18443/media/upload \
+  -H "Authorization: Bearer YOUR_TOKEN" \
+  -F "file=@/path/to/your/audio.mp3" \
+  -k
+
+  curl -X POST https://localhost:18443/media/upload \
+  -H "Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJ0ZXN0dXNlciIsInVzZXJuYW1lIjoidGVzdHVzZXIiLCJpYXQiOjE3NjA4NjYzNTYsImV4cCI6MTc2MDk1Mjc1Nn0.aBo1U-QQrsndbmk5rQFhTpOM-gyNBP4Mo4oJ3Bvzxrs" \
+  -F "file=@53531b9d-ccce-4740-a364-a3adbcfc7a22.mp4" \
+  -k
+
+
+  # Create a test file first
+echo "test audio content" > test-audio.mp3
+
+# Upload it
+curl -X POST https://localhost:18443/media/upload \
+  -H "Authorization: Bearer YOUR_TOKEN" \
+  -F "file=@test-audio.mp3" \
+  -k
+
+
+  curl -X GET https://localhost:18443/media/list \
+  -H "Authorization: Bearer YOUR_TOKEN" \
+  -k
+
+
+  # Replace with the actual path from upload response
+curl -X GET https://localhost:18443/v1/audio/2025/01/test-audio.mp3 \
+  -H "Authorization: Bearer YOUR_TOKEN" \
+  -k \
+  -o downloaded-file.mp3
+
+  curl -X GET https://localhost:18443/v1/audio/2025/10/72ae6379-4ccb-429e-89b8-4b3f12dbaadf.mp4 \
+  -H "Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJ0ZXN0dXNlciIsInVzZXJuYW1lIjoidGVzdHVzZXIiLCJpYXQiOjE3NjA4NjYzNTYsImV4cCI6MTc2MDk1Mjc1Nn0.aBo1U-QQrsndbmk5rQFhTpOM-gyNBP4Mo4oJ3Bvzxrs" \
+  -k \
+  -o downloaded-file.mp4
+
+
+
+  # Get first 1024 bytes
+curl -X GET https://localhost:18443/v1/audio/2025/01/test-audio.mp3 \
+  -H "Authorization: Bearer YOUR_TOKEN" \
+  -H "Range: bytes=0-1023" \
+  -k \
+  -v
