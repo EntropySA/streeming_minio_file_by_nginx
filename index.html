@@ -22,7 +22,7 @@
         }
 
         .container {
-            max-width: 800px;
+            max-width: 900px;
             width: 100%;
             background: white;
             border-radius: 20px;
@@ -138,6 +138,12 @@
             border: 1px solid #bee5eb;
         }
 
+        .status.warning {
+            background: #fff3cd;
+            color: #856404;
+            border: 1px solid #ffeaa7;
+        }
+
         .player-container {
             background: #000;
             padding: 20px;
@@ -204,16 +210,119 @@
             padding: 10px;
             font-size: 14px;
         }
+
+        .protocol-selector {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 15px;
+        }
+
+        .protocol-selector button {
+            flex: 1;
+            padding: 8px;
+            font-size: 13px;
+        }
+
+        .protocol-selector button.active {
+            background: linear-gradient(135deg, #28a745 0%, #20c997 100%);
+        }
+
+        .streaming-info {
+            background: #e7f3ff;
+            border: 2px solid #2196F3;
+            border-radius: 8px;
+            padding: 15px;
+            margin-top: 15px;
+            display: none;
+        }
+
+        .streaming-info.active {
+            display: block;
+        }
+
+        .streaming-info h3 {
+            color: #1976D2;
+            margin-bottom: 10px;
+            font-size: 16px;
+        }
+
+        .streaming-info .stat {
+            display: flex;
+            justify-content: space-between;
+            padding: 5px 0;
+            border-bottom: 1px solid #bbdefb;
+        }
+
+        .streaming-info .stat:last-child {
+            border-bottom: none;
+        }
+
+        .streaming-info .stat-label {
+            font-weight: 600;
+            color: #555;
+        }
+
+        .streaming-info .stat-value {
+            color: #1976D2;
+            font-family: monospace;
+        }
+
+        .mode-selector {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 15px;
+        }
+
+        .mode-selector button {
+            flex: 1;
+            padding: 10px;
+            font-size: 14px;
+        }
+
+        .mode-selector button.active {
+            background: linear-gradient(135deg, #ff6b6b 0%, #ee5a6f 100%);
+        }
+
+        .loading-bar {
+            width: 100%;
+            height: 4px;
+            background: #333;
+            border-radius: 2px;
+            overflow: hidden;
+            margin-top: 10px;
+            display: none;
+        }
+
+        .loading-bar.active {
+            display: block;
+        }
+
+        .loading-bar-fill {
+            height: 100%;
+            background: linear-gradient(90deg, #667eea, #764ba2);
+            width: 0%;
+            transition: width 0.3s;
+        }
     </style>
 </head>
 <body>
     <div class="container">
         <div class="header">
             <h1>🎬 Media Streaming Player</h1>
-            <p>Direct streaming from MinIO via Nginx with JWT authentication</p>
+            <p>True HTTP Range streaming from MinIO via Nginx with JWT authentication</p>
         </div>
 
         <div class="content">
+            <div class="protocol-selector">
+                <button onclick="setProtocol('http')" id="httpBtn">HTTP (Port 18080)</button>
+                <button onclick="setProtocol('https')" id="httpsBtn" class="active">HTTPS (Port 18443)</button>
+            </div>
+
+            <div class="mode-selector">
+                <button onclick="setMode('stream')" id="streamBtn" class="active">🌊 Stream Mode (Range Requests)</button>
+                <button onclick="setMode('blob')" id="blobBtn">📦 Blob Mode (Full Download)</button>
+            </div>
+
             <div class="form-group">
                 <label for="baseUrl">API Base URL:</label>
                 <input type="text" id="baseUrl" value="http://localhost:18080" placeholder="http://localhost:18080">
@@ -221,7 +330,7 @@
 
             <div class="form-group">
                 <label for="fileId">File ID (Path):</label>
-                <input type="text" id="fileId" value="2025/10/53531b9d-ccce-4740-a364-a3adbcfc7a22.mp4" placeholder="2025/10/filename.mp4">
+                <input type="text" id="fileId" value="2025/10/72ae6379-4ccb-429e-89b8-4b3f12dbaadf.mp4" placeholder="2025/10/filename.mp4">
             </div>
 
             <div class="form-group">
@@ -237,6 +346,39 @@
             </div>
 
             <div id="statusMessage"></div>
+            
+            <div class="loading-bar" id="loadingBar">
+                <div class="loading-bar-fill" id="loadingBarFill"></div>
+            </div>
+
+            <div class="streaming-info" id="streamingInfo">
+                <h3>📊 Streaming Statistics</h3>
+                <div class="stat">
+                    <span class="stat-label">Mode:</span>
+                    <span class="stat-value" id="statMode">-</span>
+                </div>
+                <div class="stat">
+                    <span class="stat-label">Range Support:</span>
+                    <span class="stat-value" id="statRange">-</span>
+                </div>
+                <div class="stat">
+                    <span class="stat-label">File Size:</span>
+                    <span class="stat-value" id="statSize">-</span>
+                </div>
+                <div class="stat">
+                    <span class="stat-label">Content Type:</span>
+                    <span class="stat-value" id="statType">-</span>
+                </div>
+                <div class="stat">
+                    <span class="stat-label">Initial Load:</span>
+                    <span class="stat-value" id="statLoad">-</span>
+                </div>
+                <div class="stat">
+                    <span class="stat-label">Chunks Loaded:</span>
+                    <span class="stat-value" id="statChunks">-</span>
+                </div>
+            </div>
+
             <div id="debugInfo" class="debug-info" style="display:none;"></div>
 
             <div class="player-container" id="playerContainer">
@@ -252,6 +394,44 @@
 
     <script>
         let debugLog = [];
+        let currentMode = 'stream';
+        let streamingStats = {};
+        let chunksLoaded = 0;
+        let currentBlobUrl = null;
+
+        function setProtocol(protocol) {
+            const baseUrlInput = document.getElementById('baseUrl');
+            const httpBtn = document.getElementById('httpBtn');
+            const httpsBtn = document.getElementById('httpsBtn');
+            
+            if (protocol === 'http') {
+                baseUrlInput.value = 'http://localhost:18080';
+                httpBtn.classList.add('active');
+                httpsBtn.classList.remove('active');
+            } else {
+                baseUrlInput.value = 'https://localhost:18443';
+                httpsBtn.classList.add('active');
+                httpBtn.classList.remove('active');
+            }
+            
+            addDebug(`Switched to ${protocol.toUpperCase()} protocol`);
+        }
+
+        function setMode(mode) {
+            currentMode = mode;
+            const streamBtn = document.getElementById('streamBtn');
+            const blobBtn = document.getElementById('blobBtn');
+            
+            if (mode === 'stream') {
+                streamBtn.classList.add('active');
+                blobBtn.classList.remove('active');
+                addDebug('Switched to STREAM mode (chunked range requests)');
+            } else {
+                blobBtn.classList.add('active');
+                streamBtn.classList.remove('active');
+                addDebug('Switched to BLOB mode (full download)');
+            }
+        }
 
         function addDebug(message, data = null) {
             const timestamp = new Date().toLocaleTimeString();
@@ -270,13 +450,39 @@
             debugDiv.scrollTop = debugDiv.scrollHeight;
         }
 
+        function updateStreamingStats() {
+            document.getElementById('statMode').textContent = streamingStats.mode || '-';
+            document.getElementById('statRange').textContent = streamingStats.rangeSupport || '-';
+            document.getElementById('statSize').textContent = streamingStats.fileSize || '-';
+            document.getElementById('statType').textContent = streamingStats.contentType || '-';
+            document.getElementById('statLoad').textContent = streamingStats.initialLoad || '-';
+            document.getElementById('statChunks').textContent = chunksLoaded > 0 ? chunksLoaded : '-';
+            document.getElementById('streamingInfo').classList.add('active');
+        }
+
+        function updateLoadingBar(percent) {
+            const loadingBar = document.getElementById('loadingBar');
+            const loadingBarFill = document.getElementById('loadingBarFill');
+            loadingBar.classList.add('active');
+            loadingBarFill.style.width = percent + '%';
+            
+            if (percent >= 100) {
+                setTimeout(() => {
+                    loadingBar.classList.remove('active');
+                }, 500);
+            }
+        }
+
         async function testHealth() {
             const baseUrl = document.getElementById('baseUrl').value.trim();
             showStatus('info', 'Testing health endpoint...');
             addDebug('Testing health endpoint', { url: `${baseUrl}/health` });
 
             try {
-                const response = await fetch(`${baseUrl}/health`);
+                const response = await fetch(`${baseUrl}/health`, {
+                    mode: 'cors',
+                    credentials: 'omit'
+                });
                 const text = await response.text();
                 addDebug('Health check response', { status: response.status, body: text });
                 showStatus('success', `✓ Health check passed: ${text}`);
@@ -294,8 +500,13 @@
             try {
                 const response = await fetch(`${baseUrl}/auth/login`, {
                     method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ username: 'testuser', password: 'demo123' })
+                    headers: { 
+                        'Content-Type': 'application/json',
+                        'Accept': 'application/json'
+                    },
+                    body: JSON.stringify({ username: 'testuser', password: 'demo123' }),
+                    mode: 'cors',
+                    credentials: 'omit'
                 });
 
                 const data = await response.json();
@@ -327,7 +538,12 @@
 
             try {
                 const response = await fetch(`${baseUrl}/media/list`, {
-                    headers: { 'Authorization': `Bearer ${token}` }
+                    headers: { 
+                        'Authorization': `Bearer ${token}`,
+                        'Accept': 'application/json'
+                    },
+                    mode: 'cors',
+                    credentials: 'omit'
                 });
 
                 const data = await response.json();
@@ -336,7 +552,6 @@
                 if (response.ok && data.success) {
                     showStatus('success', `✓ Found ${data.files.length} files`);
                     
-                    // Auto-fill first file if available
                     if (data.files.length > 0) {
                         const firstFile = data.files[0];
                         document.getElementById('fileId').value = firstFile.key;
@@ -352,6 +567,14 @@
         }
 
         async function loadMedia() {
+            if (currentMode === 'stream') {
+                await loadMediaStream();
+            } else {
+                await loadMediaBlob();
+            }
+        }
+
+        async function loadMediaStream() {
             const baseUrl = document.getElementById('baseUrl').value.trim();
             const fileId = document.getElementById('fileId').value.trim();
             const accessToken = document.getElementById('accessToken').value.trim();
@@ -362,16 +585,205 @@
             }
 
             const url = `${baseUrl}/v1/audio/${fileId}`;
-            showStatus('info', 'Loading media...');
-            addDebug('Loading media', { url, tokenLength: accessToken.length });
+            showStatus('info', '🌊 Loading media in STREAM mode...');
+            addDebug('Loading media (STREAM mode)', { url, tokenLength: accessToken.length });
+
+            const startTime = performance.now();
+            chunksLoaded = 0;
+
+            try {
+                // Check range support with HEAD request
+                const headResponse = await fetch(url, {
+                    method: 'HEAD',
+                    headers: {
+                        'Authorization': `Bearer ${accessToken}`
+                    },
+                    mode: 'cors',
+                    credentials: 'omit'
+                });
+
+                const acceptRanges = headResponse.headers.get('accept-ranges');
+                const contentLength = parseInt(headResponse.headers.get('content-length'));
+                const contentType = headResponse.headers.get('content-type');
+
+                addDebug('HEAD response', {
+                    status: headResponse.status,
+                    acceptRanges,
+                    contentLength,
+                    contentType
+                });
+
+                if (acceptRanges !== 'bytes') {
+                    showStatus('warning', '⚠ Range requests not supported. Falling back to blob mode...');
+                    await loadMediaBlob();
+                    return;
+                }
+
+                // Stream with chunked loading
+                const CHUNK_SIZE = 1024 * 1024; // 1MB chunks
+                const chunks = [];
+                let loaded = 0;
+
+                updateLoadingBar(0);
+
+                // Load initial chunk
+                const initialChunk = await fetchChunk(url, accessToken, 0, CHUNK_SIZE - 1);
+                chunks.push(initialChunk);
+                loaded += initialChunk.byteLength;
+                chunksLoaded++;
+                
+                const initialPercent = (loaded / contentLength) * 100;
+                updateLoadingBar(initialPercent);
+                updateStreamingStats();
+
+                addDebug(`Loaded initial chunk: ${formatBytes(loaded)} / ${formatBytes(contentLength)}`);
+
+                // Create blob from initial chunk to start playback quickly
+                const initialBlob = new Blob(chunks, { type: contentType });
+                const blobUrl = URL.createObjectURL(initialBlob);
+                
+                // Clean up old blob URL
+                if (currentBlobUrl) {
+                    URL.revokeObjectURL(currentBlobUrl);
+                }
+                currentBlobUrl = blobUrl;
+
+                const fileName = fileId.split('/').pop();
+                const ext = fileName.split('.').pop().toLowerCase();
+                const videoExts = ['mp4', 'webm', 'ogg', 'mov', 'avi', 'mkv', 'm4v'];
+                const isVideo = videoExts.includes(ext);
+
+                document.getElementById('playerTitle').textContent = `🌊 Streaming: ${fileName}`;
+                const mediaPlayer = document.getElementById('mediaPlayer');
+
+                if (isVideo) {
+                    mediaPlayer.innerHTML = `
+                        <video id="mediaElement" controls preload="auto">
+                            <source src="${blobUrl}" type="${contentType}">
+                            Your browser does not support the video tag.
+                        </video>
+                    `;
+                } else {
+                    mediaPlayer.innerHTML = `
+                        <audio id="mediaElement" controls preload="auto">
+                            <source src="${blobUrl}" type="${contentType}">
+                            Your browser does not support the audio tag.
+                        </audio>
+                    `;
+                }
+
+                const mediaElement = document.getElementById('mediaElement');
+                document.getElementById('playerContainer').classList.add('active');
+
+                const loadTime = ((performance.now() - startTime) / 1000).toFixed(2);
+                streamingStats = {
+                    mode: 'Stream (Chunked)',
+                    rangeSupport: '✅ Yes',
+                    fileSize: formatBytes(contentLength),
+                    contentType: contentType,
+                    initialLoad: `${loadTime}s (${formatBytes(loaded)})`
+                };
+                updateStreamingStats();
+
+                showStatus('success', `✓ Streaming started! Initial chunk loaded in ${loadTime}s`);
+
+                // Load remaining chunks in background
+                (async () => {
+                    while (loaded < contentLength) {
+                        const start = loaded;
+                        const end = Math.min(loaded + CHUNK_SIZE - 1, contentLength - 1);
+                        
+                        const chunk = await fetchChunk(url, accessToken, start, end);
+                        chunks.push(chunk);
+                        loaded += chunk.byteLength;
+                        chunksLoaded++;
+
+                        const percent = (loaded / contentLength) * 100;
+                        updateLoadingBar(percent);
+                        updateStreamingStats();
+
+                        addDebug(`Loaded chunk ${chunksLoaded}: ${formatBytes(loaded)} / ${formatBytes(contentLength)} (${percent.toFixed(1)}%)`);
+
+                        // Update blob URL with new chunks every 5 chunks or at end
+                        if (chunksLoaded % 5 === 0 || loaded >= contentLength) {
+                            const newBlob = new Blob(chunks, { type: contentType });
+                            const newBlobUrl = URL.createObjectURL(newBlob);
+                            
+                            // Update source without interrupting playback
+                            const currentTime = mediaElement.currentTime;
+                            const wasPaused = mediaElement.paused;
+                            
+                            mediaElement.src = newBlobUrl;
+                            mediaElement.currentTime = currentTime;
+                            
+                            if (!wasPaused) {
+                                mediaElement.play().catch(e => addDebug('Play error:', e.message));
+                            }
+                            
+                            if (currentBlobUrl) {
+                                URL.revokeObjectURL(currentBlobUrl);
+                            }
+                            currentBlobUrl = newBlobUrl;
+                        }
+                    }
+
+                    addDebug('All chunks loaded successfully');
+                    showStatus('success', `✓ Full file loaded! ${chunksLoaded} chunks, ${formatBytes(contentLength)}`);
+                })();
+
+                setTimeout(() => {
+                    document.getElementById('playerContainer').scrollIntoView({ behavior: 'smooth' });
+                }, 100);
+
+            } catch (error) {
+                addDebug('Load media failed', { error: error.message, stack: error.stack });
+                showStatus('error', `✗ Failed to load media: ${error.message}`);
+            }
+        }
+
+        async function fetchChunk(url, token, start, end) {
+            const response = await fetch(url, {
+                headers: {
+                    'Authorization': `Bearer ${token}`,
+                    'Range': `bytes=${start}-${end}`
+                },
+                mode: 'cors',
+                credentials: 'omit'
+            });
+
+            if (!response.ok) {
+                throw new Error(`Failed to fetch chunk: ${response.status}`);
+            }
+
+            return await response.arrayBuffer();
+        }
+
+        async function loadMediaBlob() {
+            const baseUrl = document.getElementById('baseUrl').value.trim();
+            const fileId = document.getElementById('fileId').value.trim();
+            const accessToken = document.getElementById('accessToken').value.trim();
+
+            if (!baseUrl || !fileId || !accessToken) {
+                showStatus('error', 'Please fill in all fields');
+                return;
+            }
+
+            const url = `${baseUrl}/v1/audio/${fileId}`;
+            showStatus('info', '📦 Loading media in BLOB mode (downloading full file)...');
+            addDebug('Loading media (BLOB mode)', { url, tokenLength: accessToken.length });
+
+            const startTime = performance.now();
+            updateLoadingBar(0);
 
             try {
                 const response = await fetch(url, {
                     method: 'GET',
                     headers: {
-                        'Authorization': `Bearer ${accessToken}`
+                        'Authorization': `Bearer ${accessToken}`,
+                        'Accept': 'video/mp4,audio/*,*/*'
                     },
-                    mode: 'cors'
+                    mode: 'cors',
+                    credentials: 'omit'
                 });
 
                 addDebug('Media response', {
@@ -381,28 +793,74 @@
                 });
 
                 if (!response.ok) {
-                    const errorText = await response.text();
+                    const contentType = response.headers.get('content-type');
+                    let errorText;
+                    if (contentType && contentType.includes('application/json')) {
+                        const errorData = await response.json();
+                        errorText = errorData.message || errorData.error || 'Unknown error';
+                    } else {
+                        errorText = await response.text();
+                    }
                     addDebug('Error response body', { body: errorText });
-                    throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+                    throw new Error(`HTTP ${response.status}: ${errorText}`);
                 }
 
-                const blob = await response.blob();
-                addDebug('Blob received', { size: blob.size, type: blob.type });
+                // Track download progress
+                const contentLength = response.headers.get('content-length');
+                const total = parseInt(contentLength, 10);
+                let loaded = 0;
+
+                const reader = response.body.getReader();
+                const chunks = [];
+
+                while (true) {
+                    const { done, value } = await reader.read();
+                    
+                    if (done) break;
+                    
+                    chunks.push(value);
+                    loaded += value.length;
+                    
+                    if (total) {
+                        const percent = (loaded / total) * 100;
+                        updateLoadingBar(percent);
+                    }
+                }
+
+                const blob = new Blob(chunks);
+                const loadTime = ((performance.now() - startTime) / 1000).toFixed(2);
+                
+                addDebug('Blob received', { size: blob.size, type: blob.type, loadTime });
+
+                streamingStats = {
+                    mode: 'Blob (Full Download)',
+                    rangeSupport: 'N/A',
+                    fileSize: formatBytes(blob.size),
+                    contentType: blob.type,
+                    initialLoad: `${loadTime}s (full file)`,
+                };
+                updateStreamingStats();
 
                 const blobUrl = URL.createObjectURL(blob);
+                
+                if (currentBlobUrl) {
+                    URL.revokeObjectURL(currentBlobUrl);
+                }
+                currentBlobUrl = blobUrl;
+
                 const fileName = fileId.split('/').pop();
                 const ext = fileName.split('.').pop().toLowerCase();
                 
                 const videoExts = ['mp4', 'webm', 'ogg', 'mov', 'avi', 'mkv', 'm4v'];
                 const isVideo = videoExts.includes(ext);
 
-                document.getElementById('playerTitle').textContent = `Now Playing: ${fileName}`;
+                document.getElementById('playerTitle').textContent = `📦 Playing (Blob): ${fileName}`;
                 const mediaPlayer = document.getElementById('mediaPlayer');
 
                 if (isVideo) {
                     mediaPlayer.innerHTML = `
                         <video controls autoplay>
-                            <source src="${blobUrl}" type="video/${ext}">
+                            <source src="${blobUrl}" type="video/${ext === 'mp4' ? 'mp4' : ext}">
                             Your browser does not support the video tag.
                         </video>
                     `;
@@ -416,7 +874,8 @@
                 }
 
                 document.getElementById('playerContainer').classList.add('active');
-                showStatus('success', `✓ Media loaded! Size: ${formatBytes(blob.size)}`);
+                showStatus('success', `✓ Media loaded! Size: ${formatBytes(blob.size)}, Time: ${loadTime}s`);
+                updateLoadingBar(100);
                 
                 setTimeout(() => {
                     document.getElementById('playerContainer').scrollIntoView({ behavior: 'smooth' });
@@ -443,7 +902,12 @@
 
             try {
                 const response = await fetch(url, {
-                    headers: { 'Authorization': `Bearer ${token}` }
+                    headers: { 
+                        'Authorization': `Bearer ${token}`,
+                        'Accept': '*/*'
+                    },
+                    mode: 'cors',
+                    credentials: 'omit'
                 });
 
                 if (!response.ok) throw new Error(`HTTP ${response.status}`);
@@ -464,19 +928,26 @@
         }
 
         function reset() {
-            document.getElementById('fileId').value = '';
             document.getElementById('accessToken').value = '';
             document.getElementById('playerContainer').classList.remove('active');
+            document.getElementById('streamingInfo').classList.remove('active');
+            document.getElementById('loadingBar').classList.remove('active');
             document.getElementById('statusMessage').innerHTML = '';
             debugLog = [];
+            streamingStats = {};
+            chunksLoaded = 0;
             document.getElementById('debugInfo').style.display = 'none';
+            
+            if (currentBlobUrl) {
+                URL.revokeObjectURL(currentBlobUrl);
+                currentBlobUrl = null;
+            }
         }
 
         function showStatus(type, message) {
             const statusDiv = document.getElementById('statusMessage');
             statusDiv.innerHTML = `<div class="status ${type}">${message}</div>`;
         }
-
 
         function formatBytes(bytes) {
             if (bytes === 0) return '0 Bytes';
@@ -487,7 +958,8 @@
         }
 
         window.addEventListener('load', () => {
-            addDebug('Page loaded', { baseUrl: document.getElementById('baseUrl').value });
+            setProtocol('http');
+            addDebug('Page loaded', { baseUrl: document.getElementById('baseUrl').value, mode: currentMode });
         });
     </script>
 </body>
