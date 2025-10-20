@@ -24,7 +24,7 @@ const minioClient = new Minio.Client({
   secretKey: process.env.MINIO_SECRET_KEY || 'minioadmin'
 });
 
-const BUCKET_NAME = process.env.MINIO_BUCKET || 'tasama-recordings';
+const BUCKET_NAME = process.env.MINIO_BUCKET || 'recordings';
 const MAX_UPLOAD_BYTES = parseInt(process.env.MAX_UPLOAD_BYTES || '1073741824');
 
 const upload = multer({
