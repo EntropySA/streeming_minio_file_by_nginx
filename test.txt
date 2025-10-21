@@ -16,8 +16,8 @@ curl -X POST https://localhost:18443/media/upload \
   -k
 
   curl -X POST https://localhost:18443/media/upload \
-  -H "Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJ0ZXN0dXNlciIsInVzZXJuYW1lIjoidGVzdHVzZXIiLCJpYXQiOjE3NjA4NjYzNTYsImV4cCI6MTc2MDk1Mjc1Nn0.aBo1U-QQrsndbmk5rQFhTpOM-gyNBP4Mo4oJ3Bvzxrs" \
-  -F "file=@53531b9d-ccce-4740-a364-a3adbcfc7a22.mp4" \
+  -H "Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJ0ZXN0dXNlciIsInVzZXJuYW1lIjoidGVzdHVzZXIiLCJpYXQiOjE3NjA5NjY0NDAsImV4cCI6MTc2MTA1Mjg0MH0.K-H6DAL-mYvdNyYSRYpdTaEbF6VGFp9yRav77YJwOh0" \
+  -F "file=@a.mp4" \
   -k
 
 

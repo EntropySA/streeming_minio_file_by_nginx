@@ -574,7 +574,7 @@
             }
         }
 
-        async function loadMediaStream() {
+async function loadMediaStream() {
             const baseUrl = document.getElementById('baseUrl').value.trim();
             const fileId = document.getElementById('fileId').value.trim();
             const accessToken = document.getElementById('accessToken').value.trim();
@@ -586,7 +586,7 @@
 
             const url = `${baseUrl}/v1/audio/${fileId}`;
             showStatus('info', '🌊 Loading media in STREAM mode...');
-            addDebug('Loading media (STREAM mode)', { url, tokenLength: accessToken.length });
+            addDebug('Loading media (STREAM mode - on-demand chunks)', { url, tokenLength: accessToken.length });
 
             const startTime = performance.now();
             chunksLoaded = 0;
@@ -619,35 +619,6 @@
                     return;
                 }
 
-                // Stream with chunked loading
-                const CHUNK_SIZE = 1024 * 1024; // 1MB chunks
-                const chunks = [];
-                let loaded = 0;
-
-                updateLoadingBar(0);
-
-                // Load initial chunk
-                const initialChunk = await fetchChunk(url, accessToken, 0, CHUNK_SIZE - 1);
-                chunks.push(initialChunk);
-                loaded += initialChunk.byteLength;
-                chunksLoaded++;
-                
-                const initialPercent = (loaded / contentLength) * 100;
-                updateLoadingBar(initialPercent);
-                updateStreamingStats();
-
-                addDebug(`Loaded initial chunk: ${formatBytes(loaded)} / ${formatBytes(contentLength)}`);
-
-                // Create blob from initial chunk to start playback quickly
-                const initialBlob = new Blob(chunks, { type: contentType });
-                const blobUrl = URL.createObjectURL(initialBlob);
-                
-                // Clean up old blob URL
-                if (currentBlobUrl) {
-                    URL.revokeObjectURL(currentBlobUrl);
-                }
-                currentBlobUrl = blobUrl;
-
                 const fileName = fileId.split('/').pop();
                 const ext = fileName.split('.').pop().toLowerCase();
                 const videoExts = ['mp4', 'webm', 'ogg', 'mov', 'avi', 'mkv', 'm4v'];
@@ -656,17 +627,49 @@
                 document.getElementById('playerTitle').textContent = `🌊 Streaming: ${fileName}`;
                 const mediaPlayer = document.getElementById('mediaPlayer');
 
+                // For video: need enough data to include metadata (moov atom)
+                // For small files, just load the whole thing
+                let INITIAL_CHUNK;
+                if (contentLength < 5 * 1024 * 1024) {
+                    // Files under 5MB - load completely for instant playback
+                    INITIAL_CHUNK = contentLength;
+                    addDebug(`Small file detected (${formatBytes(contentLength)}), loading completely...`);
+                } else {
+                    // Larger files - load first 3MB (usually includes metadata)
+                    INITIAL_CHUNK = 3 * 1024 * 1024;
+                    addDebug(`Loading initial ${formatBytes(INITIAL_CHUNK)} chunk...`);
+                }
+                
+                const initialChunk = await fetchChunk(url, accessToken, 0, Math.min(INITIAL_CHUNK - 1, contentLength - 1));
+                chunksLoaded++;
+                
+                // Properly set the content type for video
+                let mimeType = contentType;
+                if (isVideo && mimeType === 'application/octet-stream') {
+                    mimeType = `video/${ext}`;
+                }
+                
+                const initialBlob = new Blob([initialChunk], { type: mimeType });
+                const blobUrl = URL.createObjectURL(initialBlob);
+                
+                if (currentBlobUrl) {
+                    URL.revokeObjectURL(currentBlobUrl);
+                }
+                currentBlobUrl = blobUrl;
+
+                const loadTime = ((performance.now() - startTime) / 1000).toFixed(2);
+
                 if (isVideo) {
                     mediaPlayer.innerHTML = `
-                        <video id="mediaElement" controls preload="auto">
-                            <source src="${blobUrl}" type="${contentType}">
+                        <video id="mediaElement" controls preload="auto" style="background: #000;">
+                            <source src="${blobUrl}" type="${mimeType}">
                             Your browser does not support the video tag.
                         </video>
                     `;
                 } else {
                     mediaPlayer.innerHTML = `
                         <audio id="mediaElement" controls preload="auto">
-                            <source src="${blobUrl}" type="${contentType}">
+                            <source src="${blobUrl}" type="${mimeType}">
                             Your browser does not support the audio tag.
                         </audio>
                     `;
@@ -675,61 +678,97 @@
                 const mediaElement = document.getElementById('mediaElement');
                 document.getElementById('playerContainer').classList.add('active');
 
-                const loadTime = ((performance.now() - startTime) / 1000).toFixed(2);
                 streamingStats = {
-                    mode: 'Stream (Chunked)',
+                    mode: initialChunk.byteLength >= contentLength ? 'Loaded (Small File)' : 'Stream (Lazy Load)',
                     rangeSupport: '✅ Yes',
                     fileSize: formatBytes(contentLength),
-                    contentType: contentType,
-                    initialLoad: `${loadTime}s (${formatBytes(loaded)})`
+                    contentType: mimeType,
+                    initialLoad: `${loadTime}s (${formatBytes(initialChunk.byteLength)})`
                 };
                 updateStreamingStats();
 
-                showStatus('success', `✓ Streaming started! Initial chunk loaded in ${loadTime}s`);
+                const isComplete = initialChunk.byteLength >= contentLength;
+                if (isComplete) {
+                    showStatus('success', `✓ Video loaded completely in ${loadTime}s. Ready to play!`);
+                    updateLoadingBar(100);
+                } else {
+                    showStatus('success', `✓ Initial buffer loaded in ${loadTime}s. Click play to start!`);
+                    updateLoadingBar((initialChunk.byteLength / contentLength) * 100);
+                }
+                
+                // Load more chunks ONLY when needed (on play, seek, or buffer low)
+                let allChunks = [initialChunk];
+                let currentPosition = initialChunk.byteLength;
+                let isLoadingMore = false;
+                
+                // If already complete, skip loading logic
+                if (isComplete) {
+                    addDebug('File loaded completely, no additional loading needed');
+                    setTimeout(() => {
+                        document.getElementById('playerContainer').scrollIntoView({ behavior: 'smooth' });
+                    }, 100);
+                    return;
+                }
 
-                // Load remaining chunks in background
-                (async () => {
-                    while (loaded < contentLength) {
-                        const start = loaded;
-                        const end = Math.min(loaded + CHUNK_SIZE - 1, contentLength - 1);
+                const loadMoreChunks = async () => {
+                    if (isLoadingMore || currentPosition >= contentLength) return;
+                    isLoadingMore = true;
+
+                    try {
+                        const CHUNK_SIZE = 1 * 1024 * 1024; // 1MB chunks
+                        const start = currentPosition;
+                        const end = Math.min(start + CHUNK_SIZE - 1, contentLength - 1);
+
+                        addDebug(`Loading chunk on-demand: ${formatBytes(start)} - ${formatBytes(end)}`);
                         
                         const chunk = await fetchChunk(url, accessToken, start, end);
-                        chunks.push(chunk);
-                        loaded += chunk.byteLength;
+                        allChunks.push(chunk);
+                        currentPosition += chunk.byteLength;
                         chunksLoaded++;
 
-                        const percent = (loaded / contentLength) * 100;
-                        updateLoadingBar(percent);
+                        // Update blob
+                        const newBlob = new Blob(allChunks, { type: contentType });
+                        const newBlobUrl = URL.createObjectURL(newBlob);
+                        
+                        const currentTime = mediaElement.currentTime;
+                        const wasPaused = mediaElement.paused;
+                        
+                        mediaElement.src = newBlobUrl;
+                        mediaElement.currentTime = currentTime;
+                        
+                        if (!wasPaused) {
+                            await mediaElement.play().catch(e => addDebug('Play error:', e.message));
+                        }
+                        
+                        if (currentBlobUrl) {
+                            URL.revokeObjectURL(currentBlobUrl);
+                        }
+                        currentBlobUrl = newBlobUrl;
+
+                        updateLoadingBar((currentPosition / contentLength) * 100);
                         updateStreamingStats();
 
-                        addDebug(`Loaded chunk ${chunksLoaded}: ${formatBytes(loaded)} / ${formatBytes(contentLength)} (${percent.toFixed(1)}%)`);
-
-                        // Update blob URL with new chunks every 5 chunks or at end
-                        if (chunksLoaded % 5 === 0 || loaded >= contentLength) {
-                            const newBlob = new Blob(chunks, { type: contentType });
-                            const newBlobUrl = URL.createObjectURL(newBlob);
-                            
-                            // Update source without interrupting playback
-                            const currentTime = mediaElement.currentTime;
-                            const wasPaused = mediaElement.paused;
-                            
-                            mediaElement.src = newBlobUrl;
-                            mediaElement.currentTime = currentTime;
-                            
-                            if (!wasPaused) {
-                                mediaElement.play().catch(e => addDebug('Play error:', e.message));
-                            }
-                            
-                            if (currentBlobUrl) {
-                                URL.revokeObjectURL(currentBlobUrl);
-                            }
-                            currentBlobUrl = newBlobUrl;
-                        }
+                    } catch (error) {
+                        addDebug('Error loading chunk:', error.message);
+                    } finally {
+                        isLoadingMore = false;
                     }
+                };
 
-                    addDebug('All chunks loaded successfully');
-                    showStatus('success', `✓ Full file loaded! ${chunksLoaded} chunks, ${formatBytes(contentLength)}`);
-                })();
+                // Load more on user interaction
+                mediaElement.addEventListener('play', () => {
+                    if (currentPosition < contentLength) {
+                        loadMoreChunks();
+                    }
+                });
+
+                mediaElement.addEventListener('timeupdate', () => {
+                    const buffered = (currentPosition / contentLength) * mediaElement.duration;
+                    // Load more if we're within 5 seconds of buffered end
+                    if (mediaElement.currentTime > buffered - 5 && currentPosition < contentLength) {
+                        loadMoreChunks();
+                    }
+                });
 
                 setTimeout(() => {
                     document.getElementById('playerContainer').scrollIntoView({ behavior: 'smooth' });
@@ -740,7 +779,6 @@
                 showStatus('error', `✗ Failed to load media: ${error.message}`);
             }
         }
-
         async function fetchChunk(url, token, start, end) {
             const response = await fetch(url, {
                 headers: {
