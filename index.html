@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Media Streaming Player</title>
     <style>
-        * {
+   * {
             margin: 0;
             padding: 0;
             box-sizing: border-box;
@@ -302,8 +302,8 @@
             background: linear-gradient(90deg, #667eea, #764ba2);
             width: 0%;
             transition: width 0.3s;
-        }
-    </style>
+        }    
+        </style>
 </head>
 <body>
     <div class="container">
@@ -329,8 +329,8 @@
             </div>
 
             <div class="form-group">
-                <label for="fileId">File ID (Path):</label>
-                <input type="text" id="fileId" value="2025/10/72ae6379-4ccb-429e-89b8-4b3f12dbaadf.mp4" placeholder="2025/10/filename.mp4">
+                <label for="fileId">Private File ID:</label>
+                <input type="text" id="fileId" value="" placeholder="e.g., 72ae6379-4ccb-429e-89b8-4b3f12dbaadf">
             </div>
 
             <div class="form-group">
@@ -398,6 +398,7 @@
         let streamingStats = {};
         let chunksLoaded = 0;
         let currentBlobUrl = null;
+        let currentFilename = 'media.bin'; // --- NEW ---
 
         function setProtocol(protocol) {
             const baseUrlInput = document.getElementById('baseUrl');
@@ -524,6 +525,7 @@
             }
         }
 
+        // --- UPDATED ---
         async function testList() {
             const baseUrl = document.getElementById('baseUrl').value.trim();
             const token = document.getElementById('accessToken').value.trim();
@@ -553,9 +555,10 @@
                     showStatus('success', `✓ Found ${data.files.length} files`);
                     
                     if (data.files.length > 0) {
+                        // Use the privateId, not the key
                         const firstFile = data.files[0];
-                        document.getElementById('fileId').value = firstFile.key;
-                        addDebug('Auto-filled first file', { key: firstFile.key });
+                        document.getElementById('fileId').value = firstFile.privateId;
+                        addDebug('Auto-filled first file', { privateId: firstFile.privateId, originalName: firstFile.originalName });
                     }
                 } else {
                     showStatus('error', `✗ Failed to list files: ${data.error || 'Unknown error'}`);
@@ -565,6 +568,7 @@
                 showStatus('error', `✗ Failed to list files: ${error.message}`);
             }
         }
+        // --- END UPDATED ---
 
         async function loadMedia() {
             if (currentMode === 'stream') {
@@ -574,9 +578,10 @@
             }
         }
 
-async function loadMediaStream() {
+        // --- UPDATED ---
+        async function loadMediaStream() {
             const baseUrl = document.getElementById('baseUrl').value.trim();
-            const fileId = document.getElementById('fileId').value.trim();
+            const fileId = document.getElementById('fileId').value.trim(); // This is now the privateId
             const accessToken = document.getElementById('accessToken').value.trim();
 
             if (!baseUrl || !fileId || !accessToken) {
@@ -605,13 +610,22 @@ async function loadMediaStream() {
                 const acceptRanges = headResponse.headers.get('accept-ranges');
                 const contentLength = parseInt(headResponse.headers.get('content-length'));
                 const contentType = headResponse.headers.get('content-type');
+                
+                // Get the filename from our custom header
+                const fileName = headResponse.headers.get('x-app-filename') || fileId;
+                currentFilename = fileName; // Save for download
 
                 addDebug('HEAD response', {
                     status: headResponse.status,
                     acceptRanges,
                     contentLength,
-                    contentType
+                    contentType,
+                    fileName
                 });
+                
+                if (!headResponse.ok) {
+                    throw new Error(`HEAD request failed: ${headResponse.status}`);
+                }
 
                 if (acceptRanges !== 'bytes') {
                     showStatus('warning', '⚠ Range requests not supported. Falling back to blob mode...');
@@ -619,7 +633,6 @@ async function loadMediaStream() {
                     return;
                 }
 
-                const fileName = fileId.split('/').pop();
                 const ext = fileName.split('.').pop().toLowerCase();
                 const videoExts = ['mp4', 'webm', 'ogg', 'mov', 'avi', 'mkv', 'm4v'];
                 const isVideo = videoExts.includes(ext);
@@ -779,6 +792,8 @@ async function loadMediaStream() {
                 showStatus('error', `✗ Failed to load media: ${error.message}`);
             }
         }
+        // --- END UPDATED ---
+        
         async function fetchChunk(url, token, start, end) {
             const response = await fetch(url, {
                 headers: {
@@ -796,9 +811,10 @@ async function loadMediaStream() {
             return await response.arrayBuffer();
         }
 
+        // --- UPDATED ---
         async function loadMediaBlob() {
             const baseUrl = document.getElementById('baseUrl').value.trim();
-            const fileId = document.getElementById('fileId').value.trim();
+            const fileId = document.getElementById('fileId').value.trim(); // This is now the privateId
             const accessToken = document.getElementById('accessToken').value.trim();
 
             if (!baseUrl || !fileId || !accessToken) {
@@ -824,10 +840,15 @@ async function loadMediaStream() {
                     credentials: 'omit'
                 });
 
+                // Get filename from our custom header
+                const fileName = response.headers.get('x-app-filename') || fileId;
+                currentFilename = fileName; // Save for download
+
                 addDebug('Media response', {
                     status: response.status,
                     statusText: response.statusText,
-                    headers: Object.fromEntries([...response.headers.entries()])
+                    headers: Object.fromEntries([...response.headers.entries()]),
+                    fileName
                 });
 
                 if (!response.ok) {
@@ -886,7 +907,6 @@ async function loadMediaStream() {
                 }
                 currentBlobUrl = blobUrl;
 
-                const fileName = fileId.split('/').pop();
                 const ext = fileName.split('.').pop().toLowerCase();
                 
                 const videoExts = ['mp4', 'webm', 'ogg', 'mov', 'avi', 'mkv', 'm4v'];
@@ -924,10 +944,11 @@ async function loadMediaStream() {
                 showStatus('error', `✗ Failed to load media: ${error.message}`);
             }
         }
+        // --- END UPDATED ---
 
         async function downloadMedia() {
             const baseUrl = document.getElementById('baseUrl').value.trim();
-            const fileId = document.getElementById('fileId').value.trim();
+            const fileId = document.getElementById('fileId').value.trim(); // privateId
             const token = document.getElementById('accessToken').value.trim();
 
             if (!baseUrl || !fileId || !token) {
@@ -954,7 +975,7 @@ async function loadMediaStream() {
                 const downloadUrl = window.URL.createObjectURL(blob);
                 const a = document.createElement('a');
                 a.href = downloadUrl;
-                a.download = fileId.split('/').pop();
+                a.download = currentFilename; // Use the saved filename
                 document.body.appendChild(a);
                 a.click();
                 window.URL.revokeObjectURL(downloadUrl);
@@ -974,6 +995,7 @@ async function loadMediaStream() {
             debugLog = [];
             streamingStats = {};
             chunksLoaded = 0;
+            currentFilename = 'media.bin';
             document.getElementById('debugInfo').style.display = 'none';
             
             if (currentBlobUrl) {

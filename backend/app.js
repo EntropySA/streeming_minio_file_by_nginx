@@ -12,6 +12,12 @@ app.use(express.json());
 const JWT_SECRET = process.env.JWT_SECRET || 'change-this-super-secret-jwt-key-in-production';
 const JWT_EXPIRES_IN = '24h';
 
+// --- NEW ---
+// In-memory database to map private IDs to file metadata
+// In production, this would be a real database (e.g., Redis, PostgreSQL)
+const mediaDatabase = {};
+// --- END NEW ---
+
 console.log('Starting backend...');
 console.log('JWT_SECRET:', JWT_SECRET.substring(0, 10) + '...');
 console.log('MINIO_ENDPOINT:', process.env.MINIO_ENDPOINT || 'minio');
@@ -81,6 +87,7 @@ app.post('/auth/login', (req, res) => {
   res.status(401).json({ error: 'unauthorized', message: 'Invalid credentials' });
 });
 
+// --- UPDATED ---
 // Authorization endpoint for Nginx auth_request
 app.get('/authz/media', (req, res) => {
   const authHeader = req.headers['authorization'];
@@ -99,11 +106,43 @@ app.get('/authz/media', (req, res) => {
       return res.status(403).send('Forbidden');
     }
     
-    console.log('AUTHZ SUCCESS:', user.username);
+    // --- NEW LOGIC ---
+    // Get the private ID from the original request URI
+    const originalUri = req.headers['x-original-uri'];
+    if (!originalUri) {
+        console.log('AUTHZ FAILED: Missing X-Original-URI header');
+        return res.status(400).send('Bad Request');
+    }
+
+    const match = originalUri.match(/\/v1\/audio\/(.*)$/);
+    if (!match || !match[1]) {
+        console.log('AUTHZ FAILED: Could not parse private ID from URI', originalUri);
+        return res.status(400).send('Bad Request: Invalid URI');
+    }
+
+    const privateId = match[1];
+    const mediaInfo = mediaDatabase[privateId];
+
+    if (!mediaInfo) {
+        console.log('AUTHZ FAILED: No media found for private ID', privateId);
+        return res.status(404).send('Not Found');
+    }
+
+    // Success! Return 200 OK and set headers for Nginx
+    console.log(`AUTHZ SUCCESS: User [${user.username}] -> Private ID [${privateId}] -> MinIO Key [${mediaInfo.key}]`);
+    
+    // This header will be captured by Nginx to rewrite the request to MinIO
+    res.setHeader('X-Media-Key', mediaInfo.key);
+    // This header will be passed back to the client for display
+    res.setHeader('X-Media-Filename', mediaInfo.originalName);
+
     res.status(200).send('OK');
+    // --- END NEW LOGIC ---
   });
 });
+// --- END UPDATED ---
 
+// --- UPDATED ---
 // Upload endpoint
 app.post('/media/upload', authenticateToken, upload.single('file'), async (req, res) => {
   try {
@@ -116,10 +155,14 @@ app.post('/media/upload', authenticateToken, upload.single('file'), async (req, 
     const now = new Date();
     const year = now.getFullYear();
     const month = String(now.getMonth() + 1).padStart(2, '0');
-    const fileId = uuidv4();
-    const objectName = `${year}/${month}/${fileId}${ext}`;
+    
+    // This is the *real* key for the object in MinIO
+    const objectName = `${year}/${month}/${uuidv4()}${ext}`;
+    
+    // This is the *private* ID we will give to the user
+    const privateId = uuidv4();
 
-    console.log('Uploading:', objectName);
+    console.log(`Uploading: [${file.originalname}] as [${objectName}] with Private ID [${privateId}]`);
 
     await minioClient.putObject(
       BUCKET_NAME,
@@ -129,56 +172,51 @@ app.post('/media/upload', authenticateToken, upload.single('file'), async (req, 
       { 'Content-Type': file.mimetype }
     );
 
-    console.log('Upload successful');
+    console.log('Upload successful to MinIO');
 
-    res.json({
-      success: true,
-      message: 'File uploaded successfully',
-      file: {
-        id: fileId,
-        key: objectName,
+    // Store metadata in our "database"
+    const fileMetadata = {
+        privateId: privateId,
+        key: objectName, // The MinIO key
         originalName: file.originalname,
         size: file.size,
         mimeType: file.mimetype,
         uploadedAt: now.toISOString(),
         uploadedBy: req.user.username
-      }
+    };
+    mediaDatabase[privateId] = fileMetadata;
+
+    console.log('Metadata saved to DB');
+
+    // Return the *privateId* to the client
+    res.json({
+      success: true,
+      message: 'File uploaded successfully',
+      file: fileMetadata // Send all metadata back
     });
   } catch (error) {
     console.error('Upload error:', error);
     res.status(500).json({ error: 'internal_error', message: error.message });
   }
 });
+// --- END UPDATED ---
 
+// --- UPDATED ---
 // List files endpoint
 app.get('/media/list', authenticateToken, async (req, res) => {
   try {
-    const stream = minioClient.listObjects(BUCKET_NAME, '', true);
-    const files = [];
+    // List files from our in-memory DB, not MinIO
+    const files = Object.values(mediaDatabase);
 
-    stream.on('data', (obj) => {
-      files.push({
-        key: obj.name,
-        size: obj.size,
-        lastModified: obj.lastModified,
-        etag: obj.etag
-      });
-    });
+    console.log('Listed files from DB:', files.length);
+    res.json({ success: true, files, count: files.length });
 
-    stream.on('error', (err) => {
-      console.error('List error:', err);
-      res.status(500).json({ error: 'internal_error', message: err.message });
-    });
-
-    stream.on('end', () => {
-      console.log('Listed files:', files.length);
-      res.json({ success: true, files, count: files.length });
-    });
   } catch (error) {
     console.error('List error:', error);
     res.status(500).json({ error: 'internal_error', message: error.message });
   }
 });
+// --- END UPDATED ---
 
 // Error handler
 app.use((err, req, res, next) => {
